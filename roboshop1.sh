@@ -1,0 +1,52 @@
+#!/bin/bash
+
+AMI_ID="ami-0220d79f3f480ecf5"
+SG_ID="sg-0be117df529318c7a"   # replace with your SG ID
+INSTANCES=("mongodb" "redis" "mysql" "rabbitmq" "catalogue" "user" "cart" "shipping" "payment" "dispatch" "frontend")
+ZONE_ID="Z05356942IP9LUFE7SK4L" # replace with your ZONE ID
+DOMAIN_NAME="devops23.site"     # replace with your domain
+
+for instance in "${INSTANCES[@]}"
+do
+  # Launch EC2 instance
+  INSTANCE_ID=$(aws ec2 run-instances \
+    --image-id $AMI_ID \
+    --instance-type t3.micro \
+    --security-group-ids $SG_ID \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$instance}]" \
+    --query "Instances[0].InstanceId" \
+    --output text)
+
+  # Get IP address (frontend gets public, others get private)
+  if [ "$instance" != "frontend" ]; then
+    IP=$(aws ec2 describe-instances \
+      --instance-ids $INSTANCE_ID \
+      --query "Reservations[0].Instances[0].PrivateIpAddress" \
+      --output text)
+    RECORD_NAME="$instance.$DOMAIN_NAME"
+  else
+    IP=$(aws ec2 describe-instances \
+      --instance-ids $INSTANCE_ID \
+      --query "Reservations[0].Instances[0].PublicIpAddress" \
+      --output text)
+    RECORD_NAME="$DOMAIN_NAME"
+  fi
+
+  echo "$instance IP address: $IP"
+
+  # Update Route 53 record
+  aws route53 change-resource-record-sets \
+    --hosted-zone-id $ZONE_ID \
+    --change-batch "{
+      \"Comment\": \"Creating or Updating a record set for $instance\",
+      \"Changes\": [{
+        \"Action\": \"UPSERT\",
+        \"ResourceRecordSet\": {
+          \"Name\": \"$RECORD_NAME\",
+          \"Type\": \"A\",
+          \"TTL\": 60,
+          \"ResourceRecords\": [{\"Value\": \"$IP\"}]
+        }
+      }]
+    }"
+done
